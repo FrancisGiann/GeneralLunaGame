@@ -1,0 +1,49 @@
+.button{
+    -fx-background-color: #A8DADC;
+    -fx-border-color: Black;
+    -fx-border-width: 3px;
+
+}
+.button:hover{
+    -fx-background-color: Gray;
+}
+.Title{
+    -fx-background-color: #A8DADC;
+    -fx-border-color: Black;
+    -fx-border-width: 6px;
+}
+.bg {
+    -fx-background-color: #A8DADC;
+    -fx-border-color: Black;
+
+}
+.bd{
+   fx-border-color: #A8DADC;
+      -fx-border-width: 6px;
+   -fx-background-color: Black;
+}
+.bg1 {
+   -fx-background-color: Black;
+}
+
+.selectChar {
+    -fx-border-color: #0cc0df;
+    -fx-border-width: 6px;
+    -fx-background-color: #42567C;
+}
+.charBTN{
+    -fx-background-color: Black;
+    -fx-border-width: 1px;
+
+}
+.charBTN:hover{
+    -fx-background-color: Gray;
+}
+.charSel{
+    -fx-background-color: Black;
+}
+.char1{
+        -fx-border-color: #0cc0df;
+        -fx-border-width: 3px;
+        -fx-background-color: Black;
+}
