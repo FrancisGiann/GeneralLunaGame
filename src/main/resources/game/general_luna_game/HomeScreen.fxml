@@ -6,20 +6,24 @@
 <?import javafx.scene.layout.AnchorPane?>
 <?import javafx.scene.text.Font?>
 
-<AnchorPane prefHeight="800.0" prefWidth="1000.0" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1" fx:controller="game.general_luna_game.HomeScreenController">
+<AnchorPane fx:id="rootPane" prefHeight="800.0" prefWidth="1000.0" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1" fx:controller="game.general_luna_game.HomeScreenController">
    <children>
       <ImageView fitHeight="800.0" fitWidth="1000.0" pickOnBounds="true" preserveRatio="true">
          <image>
             <Image url="@../../images/Nine%20by%20Five%20(4).gif" />
          </image>
       </ImageView>
-      <Button fx:id="startGameButton" layoutX="436.0" layoutY="550.0" mnemonicParsing="false" prefHeight="50.0" prefWidth="162.0" styleClass="char1" stylesheets="@style.css" text="START GAME" textFill="#0cc0df">
+      <Button fx:id="startGameButton" layoutX="410.0" layoutY="510.0" mnemonicParsing="false" prefHeight="48.0" prefWidth="180.0" styleClass="char1" stylesheets="@style.css" text="START GAME" textFill="#0cc0df">
          <font>
-            <Font name="Pixeloid Mono" size="17.0" />
+            <Font name="Pixeloid Mono" size="16.0" />
          </font></Button>
-      <Button fx:id="leaderboardButton" layoutX="436.0" layoutY="681.0" mnemonicParsing="false" prefHeight="50.0" prefWidth="162.0" styleClass="char1" stylesheets="@style.css" text="LEADERBOARD" textFill="#0cc0df">
+      <Button fx:id="leaderboardButton" layoutX="410.0" layoutY="580.0" mnemonicParsing="false" prefHeight="48.0" prefWidth="180.0" styleClass="char1" stylesheets="@style.css" text="LEADERBOARD" textFill="#0cc0df">
          <font>
-            <Font name="Pixeloid Mono" size="17.0" />
+            <Font name="Pixeloid Mono" size="16.0" />
+         </font></Button>
+      <Button fx:id="settingsButton" layoutX="410.0" layoutY="650.0" mnemonicParsing="false" prefHeight="48.0" prefWidth="180.0" styleClass="char1" stylesheets="@style.css" text="SETTINGS" textFill="#0cc0df">
+         <font>
+            <Font name="Pixeloid Mono" size="16.0" />
          </font></Button>
    </children>
 </AnchorPane>
