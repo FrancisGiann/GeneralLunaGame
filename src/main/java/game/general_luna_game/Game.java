@@ -18,7 +18,6 @@ import javafx.application.Platform;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
-import javafx.scene.media.Media;
 import javafx.scene.media.MediaPlayer;
 
 public class Game extends Pane {
@@ -26,9 +25,12 @@ public class Game extends Pane {
     private Hero player;
     private List<Enemy> enemies;
     private List<Projectile> projectiles;
+    private List<PowerUp> powerUps;
+    private ParticleSystem particleSystem;
     private AnimationTimer gameTimer;
     private Point mousePosition;
     private int currentStage = 1;
+    private int score = 0;
     private long startTime;
     private Set<KeyCode> activeKeys;
     private Image[] mapBackgrounds;
@@ -56,6 +58,14 @@ public class Game extends Pane {
     private static final double RELOAD_TIME = 2.0;
     private static final double SPEED_BOOST_MULTIPLIER = 1.5;
     private int normalSpeed = 4;
+    private int healthUpgradeLevel = 0;
+    private int speedUpgradeLevel = 0;
+    private int damageUpgradeLevel = 0;
+    private boolean isShopOpen = false;
+    private ShopMenu shopMenu;
+    private boolean isPaused = false;
+    private long pauseStartTime = 0;
+    private PauseMenu pauseMenu;
     private static final int BOSS_HEALTH_BASE = 500;
     private static final int BOSS_DAMAGE = 15;
     private Boss bossPrefab = null;
@@ -65,14 +75,20 @@ public class Game extends Pane {
     private Map<String, AudioClip> soundEffects;
     public static MediaPlayer backgroundMusic;
 
-
-
+    // Screen Shake variables
+    private double shakeDuration = 0;
+    private double shakeIntensity = 0;
+    private double shakeOffsetX = 0;
+    private double shakeOffsetY = 0;
+    private final Random random = new Random();
 
     public Game(Hero hero, GeneralLunaGame gameFrame) {
         this.gameFrame = gameFrame;
         this.player = hero;
         this.enemies = new ArrayList<>();
         this.projectiles = new ArrayList<>();
+        this.powerUps = new ArrayList<>();
+        this.particleSystem = new ParticleSystem();
         this.mousePosition = new Point(0, 0);
         this.activeKeys = new HashSet<>();
         this.lastDamageTime = new HashMap<>();
@@ -81,6 +97,11 @@ public class Game extends Pane {
         gc = gameCanvas.getGraphicsContext2D();
         getChildren().add(gameCanvas);
 
+        shopMenu = new ShopMenu(this);
+        getChildren().add(shopMenu);
+
+        pauseMenu = new PauseMenu(this);
+        getChildren().add(pauseMenu);
 
         startTime = System.currentTimeMillis();
         setupGameLoop();
@@ -88,10 +109,7 @@ public class Game extends Pane {
         spawnEnemies();
         initializeAmmo();
         loadSoundEffects();
-        loadBackgroundMusic();
-        if (backgroundMusic != null) {
-            backgroundMusic.play();
-        }
+        SoundManager.getInstance().playGameBgm();
 
         this.setOnKeyPressed(this::handleKeyPressed);
         this.setOnKeyReleased(this::handleKeyReleased);
@@ -99,45 +117,35 @@ public class Game extends Pane {
         gameCanvas.setOnMouseMoved(this::handleMouseMoved);
         gameCanvas.setOnMouseDragged(this::handleMouseMoved);
         gameCanvas.setOnMousePressed(event -> {
-            isMousePressed = true;
-            handleMouseMoved(event);
+            if (!isShopOpen && !isPaused) {
+                isMousePressed = true;
+                handleMouseMoved(event);
+            }
         });
         gameCanvas.setOnMouseReleased(event -> {
             isMousePressed = false;
         });
-
     }
+
+    private long lastUpdate = 0;
     private void setupGameLoop() {
         gameTimer = new AnimationTimer() {
             @Override
             public void handle(long now) {
-                updateGame();
-                renderGame();
+                if (now - lastUpdate >= 16_666_666) { // ~60 FPS
+                    updateGame();
+                    renderGame();
+                    lastUpdate = now;
+                }
             }
         };
         gameTimer.start();
     }
+
     private void loadSoundEffects() {
-        soundEffects = new HashMap<>();
-        try {
-            soundEffects.put("Shoot_Pistol", new AudioClip(getClass().getResource("/sounds/pistol.mp3").toExternalForm()));
-            soundEffects.put("Shoot_Rifle", new AudioClip(getClass().getResource("/sounds/rifle.mp3").toExternalForm()));
-            soundEffects.put("Enemy_Hit", new AudioClip(getClass().getResource("/sounds/enemyhit.mp3").toExternalForm()));
-            soundEffects.put("Player_Hit", new AudioClip(getClass().getResource("/sounds/playerhit.mp3").toExternalForm()));
-        } catch (Exception e) {
-            System.err.println("Could not load sound effects: " + e.getMessage());
-        }
+        soundEffects = SoundManager.getInstance().getSoundEffects();
     }
-    private void loadBackgroundMusic() {
-        try {
-            Media media = new Media(getClass().getResource("/sounds/bgm.mp3").toExternalForm());
-            backgroundMusic = new MediaPlayer(media);
-            backgroundMusic.setCycleCount(MediaPlayer.INDEFINITE);
-            backgroundMusic.setVolume(0.3);
-        } catch (Exception e) {
-            System.err.println("Could not load background music: " + e.getMessage());
-        }
-    }
+
     private void initializeAmmo() {
         switch (player.getCharacterType()) {
             case "Pistol":
@@ -151,6 +159,7 @@ public class Game extends Pane {
         }
         currentAmmo = maxAmmo;
     }
+
     private void startReload() {
         if (!isReloading) {
             isReloading = true;
@@ -159,9 +168,126 @@ public class Game extends Pane {
         }
     }
 
+    public void triggerScreenShake(double duration, double intensity) {
+        this.shakeDuration = duration;
+        this.shakeIntensity = intensity;
+    }
+
+    public void pauseGame() {
+        if (isPaused || isShopOpen || isGameOver || gameWon) return;
+        isPaused = true;
+        pauseStartTime = System.currentTimeMillis();
+        activeKeys.clear();
+        isMousePressed = false;
+        if (pauseMenu != null) {
+            pauseMenu.show();
+        }
+    }
+
+    public void resumeGame() {
+        if (!isPaused) return;
+        isPaused = false;
+        long pauseDuration = System.currentTimeMillis() - pauseStartTime;
+        startTime += pauseDuration;
+        lastShotTime += pauseDuration;
+        if (isReloading) {
+            reloadStartTime += pauseDuration;
+        }
+        for (Map.Entry<Enemy, Long> entry : lastDamageTime.entrySet()) {
+            entry.setValue(entry.getValue() + pauseDuration);
+        }
+        if (pauseMenu != null) {
+            pauseMenu.hide();
+        }
+        this.requestFocus();
+    }
+
+    public void togglePause() {
+        if (isPaused) {
+            resumeGame();
+        } else {
+            pauseGame();
+        }
+    }
+
+    public void quitToMainMenu() {
+        stopGame();
+        SoundManager.getInstance().stopBgm();
+        if (gameFrame != null) {
+            try {
+                gameFrame.showHomeScreen();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public boolean isPaused() {
+        return isPaused;
+    }
+
+    public PauseMenu getPauseMenu() {
+        return pauseMenu;
+    }
+
+    public long getElapsedTime() {
+        if (isPaused) {
+            return Math.max(0, (pauseStartTime - startTime) / 1000);
+        }
+        return Math.max(0, (System.currentTimeMillis() - startTime) / 1000);
+    }
+
     private void updateGame() {
+        if (isPaused) {
+            return;
+        }
+
+        if (isShopOpen) {
+            if (particleSystem != null) {
+                particleSystem.update(0.016);
+            }
+            return;
+        }
+
         long currentTime = System.currentTimeMillis();
-        long elapsedTime = (currentTime - startTime) / 1000;
+
+        // Screen Shake update
+        if (shakeDuration > 0) {
+            shakeOffsetX = (random.nextDouble() * 2 - 1) * shakeIntensity;
+            shakeOffsetY = (random.nextDouble() * 2 - 1) * shakeIntensity;
+            shakeDuration -= 0.016;
+            if (shakeDuration <= 0) {
+                shakeOffsetX = 0;
+                shakeOffsetY = 0;
+                shakeIntensity = 0;
+            }
+        }
+
+        // Particle system update
+        if (particleSystem != null) {
+            particleSystem.update(0.016);
+        }
+
+        // Power-ups update and collection
+        for (PowerUp powerUp : new ArrayList<>(powerUps)) {
+            powerUp.update(0.016);
+            if (powerUp.isExpired()) {
+                powerUps.remove(powerUp);
+            } else if (powerUp.collidesWith(player)) {
+                if (powerUp.getType() == PowerUp.PowerUpType.HEALTH) {
+                    player.heal(powerUp.getHealAmount());
+                    particleSystem.spawnPowerUpCollect(powerUp.getX(), powerUp.getY(), Color.LIGHTGREEN, 15);
+                } else if (powerUp.getType() == PowerUp.PowerUpType.AMMO) {
+                    currentAmmo = maxAmmo;
+                    if (isReloading) {
+                        isReloading = false;
+                        playerSpeed = normalSpeed;
+                    }
+                    particleSystem.spawnPowerUpCollect(powerUp.getX(), powerUp.getY(), Color.GOLD, 15);
+                }
+                powerUps.remove(powerUp);
+            }
+        }
 
         if (activeKeys.contains(KeyCode.W)) player.moveUp(playerSpeed);
         if (activeKeys.contains(KeyCode.S)) player.moveDown(playerSpeed);
@@ -176,8 +302,11 @@ public class Game extends Pane {
                 projectile.update();
 
                 if (Math.abs(projectile.x - player.x) < 20 && Math.abs(projectile.y - player.y) < 20) {
-                    player.takeDamage(BOSS_DAMAGE);
+                    player.takeDamage(bossPrefab.getDamage());
                     bossPrefab.getBossProjectiles().remove(projectile);
+                    particleSystem.spawnBlood(player.x, player.y, 12);
+                    triggerScreenShake(0.25, 8.0);
+                    SoundManager.getInstance().playSfx("Player_Hit");
                     checkGameOver();
                 }
 
@@ -247,8 +376,8 @@ public class Game extends Pane {
                 separationY /= separationLength;
             }
 
-            double finalDx = (dx * 0.7 + separationX * 0.3) * enemy.speed;
-            double finalDy = (dy * 0.7 + separationY * 0.3) * enemy.speed;
+            double finalDx = (dx * 0.7 + separationX * 0.3) * enemy.getSpeed();
+            double finalDy = (dy * 0.7 + separationY * 0.3) * enemy.getSpeed();
 
             enemy.x += finalDx;
             enemy.y += finalDy;
@@ -259,23 +388,30 @@ public class Game extends Pane {
             if (Math.abs(enemy.x - player.x) < 10 && Math.abs(enemy.y - player.y) < 10) {
                 Long lastDamage = lastDamageTime.getOrDefault(enemy, 0L);
                 if (currentTime - lastDamage >= DAMAGE_COOLDOWN * 1000) {
-                    player.takeDamage(ENEMY_DAMAGE);
+                    player.takeDamage(enemy.getDamage());
                     lastDamageTime.put(enemy, currentTime);
+                    particleSystem.spawnBlood(player.x, player.y, 10);
+                    triggerScreenShake(0.2, 6.0);
+                    SoundManager.getInstance().playSfx("Player_Hit");
                     checkGameOver();
                 }
             }
         }
 
-
         updateProjectiles();
 
-        if (enemies.isEmpty()) {
-            advanceToNextStage();
+        if (enemies.isEmpty() && !isGameOver && !gameWon) {
+            if (currentStage >= 5) {
+                // Handled if boss defeated
+            } else {
+                openShopMenu();
+            }
         }
         if (bossPrefab != null && bossPrefab.getHealth() <= 0) {
             Victory();
         }
     }
+
     private void advanceToNextStage() {
         currentStage++;
         spawnEnemies();
@@ -291,8 +427,39 @@ public class Game extends Pane {
                 if (Math.abs(projectile.x - enemy.x) < hitboxWidth / 2 &&
                         Math.abs(projectile.y - enemy.y) < hitboxHeight / 2) {
                     enemy.takeDamage(player.getDamage());
+
+                    // Visual feedback: Hit particles & sparks
+                    if (enemy instanceof Boss) {
+                        particleSystem.spawnHitParticles(projectile.x, projectile.y, Color.PURPLE, 8);
+                        particleSystem.spawnSparks(projectile.x, projectile.y, 6);
+                    } else if (enemy.isRunner()) {
+                        particleSystem.spawnHitParticles(projectile.x, projectile.y, Color.ORANGE, 6);
+                        particleSystem.spawnBlood(projectile.x, projectile.y, 6);
+                    } else {
+                        particleSystem.spawnBlood(projectile.x, projectile.y, 8);
+                        particleSystem.spawnSparks(projectile.x, projectile.y, 4);
+                    }
+
+                    SoundManager.getInstance().playSfx("Enemy_Hit");
                     projectiles.remove(projectile);
+
                     if (enemy.getHealth() <= 0) {
+                        // Add score
+                        score += enemy.getScoreValue();
+
+                        // Explosion & Power-up drop on defeat
+                        if (enemy instanceof Boss) {
+                            particleSystem.spawnExplosion(enemy.x, enemy.y, 40);
+                            powerUps.add(new PowerUp(enemy.x - 20, enemy.y, PowerUp.PowerUpType.HEALTH));
+                            powerUps.add(new PowerUp(enemy.x + 20, enemy.y, PowerUp.PowerUpType.AMMO));
+                        } else {
+                            particleSystem.spawnExplosion(enemy.x, enemy.y, 16);
+                            if (Math.random() < 0.35) {
+                                PowerUp.PowerUpType dropType = Math.random() < 0.5 ? PowerUp.PowerUpType.HEALTH : PowerUp.PowerUpType.AMMO;
+                                powerUps.add(new PowerUp(enemy.x, enemy.y, dropType));
+                            }
+                        }
+
                         enemies.remove(enemy);
                         lastDamageTime.remove(enemy);
                     }
@@ -305,6 +472,7 @@ public class Game extends Pane {
             }
         }
     }
+
     private double getWeaponCooldown() {
         switch (player.getCharacterType()) {
             case "Pistol":
@@ -326,6 +494,7 @@ public class Game extends Pane {
                 return DEFAULT_SPEED;
         }
     }
+
     private void shoot() {
         if (mousePosition == null) return;
 
@@ -350,37 +519,55 @@ public class Game extends Pane {
             projectile.weaponType = player.getCharacterType();
             projectiles.add(projectile);
         }
-        if (soundEffects != null) {
-            AudioClip shootSound = soundEffects.get("Shoot_" + player.getCharacterType());
-            if (shootSound != null) {
-                shootSound.play(0.3);
-            }
-        }
+        SoundManager.getInstance().playSfx("Shoot_" + player.getCharacterType());
     }
 
     private void renderGame() {
         gc.clearRect(0, 0, gameCanvas.getWidth(), gameCanvas.getHeight());
+
+        gc.save();
+        if (shakeDuration > 0) {
+            gc.translate(shakeOffsetX, shakeOffsetY);
+        }
+
         if (mapBackgrounds != null && mapBackgrounds[0] != null) {
             gc.drawImage(mapBackgrounds[0], 0, 0, gameCanvas.getWidth(), gameCanvas.getHeight());
         } else {
             gc.setFill(Color.GRAY);
             gc.fillRect(0, 0, gameCanvas.getWidth(), gameCanvas.getHeight());
         }
+
+        // Draw Collectible Power-Ups
+        for (PowerUp powerUp : powerUps) {
+            powerUp.draw(gc);
+        }
+
         player.draw(gc);
-        drawPlayerUI();
         drawEnhancedEnemies();
         drawProjectiles();
+
+        // Draw Visual Particles
+        if (particleSystem != null) {
+            particleSystem.render(gc);
+        }
+
+        gc.restore();
+
+        // Draw UI without screen shake for clean readability
+        drawPlayerUI();
     }
 
     private void loadMapBackgrounds() {
         mapBackgrounds = new Image[1];
         InputStream is = getClass().getResourceAsStream("/images/map1.jpg");
-        mapBackgrounds[0] = new Image(is);
-
+        if (is != null) {
+            mapBackgrounds[0] = new Image(is);
+        }
     }
 
     private void spawnEnemies() {
         if (currentStage == 5 && bossPrefab == null) {
+            SoundManager.getInstance().playBossBgm();
             if (bossImage == null) {
                 try {
                     InputStream is = getClass().getResourceAsStream("/images/Boss.gif");
@@ -398,6 +585,9 @@ public class Game extends Pane {
             int bossY = (800);
 
             bossPrefab = new Boss(bossX, bossY, bossImage);
+            bossPrefab.setHealth(BOSS_HEALTH_BASE + (currentStage - 1) * 100);
+            bossPrefab.setMaxHealth(bossPrefab.getHealth());
+            bossPrefab.setDamage(BOSS_DAMAGE + (currentStage - 1) * 3);
             enemies.add(bossPrefab);
             return;
         }
@@ -415,9 +605,29 @@ public class Game extends Pane {
             enemyY = Math.min(Math.max(enemyY, 0), (int)gameCanvas.getHeight() - 20);
 
             if (currentStage != 5) {
-                Enemy enemy = new Enemy(enemyX, enemyY);
-                enemy.speed = 1.5 + (currentStage - 1) * 0.15;
-                enemy.health = 30 + (currentStage - 1) * 10;
+                // Runner spawn chance starting at Stage 2
+                boolean spawnRunner = currentStage >= 2 && Math.random() < Math.min(0.5, 0.2 + (currentStage - 2) * 0.15);
+                Enemy enemy;
+                int normalBaseHealth = 30 + (currentStage - 1) * 15;
+                int normalBaseDamage = 5 + (currentStage - 1) * 2;
+                double normalBaseSpeed = 1.6 + (currentStage - 1) * 0.15;
+                int normalScore = 100 + (currentStage - 1) * 25;
+
+                if (spawnRunner) {
+                    enemy = new Enemy(enemyX, enemyY, Enemy.EnemyType.RUNNER);
+                    enemy.setSpeed(normalBaseSpeed * 1.5);
+                    enemy.setHealth((int)(normalBaseHealth * 0.65));
+                    enemy.setMaxHealth(enemy.getHealth());
+                    enemy.setDamage(Math.max(4, normalBaseDamage - 1));
+                    enemy.setScoreValue(normalScore + 50);
+                } else {
+                    enemy = new Enemy(enemyX, enemyY, Enemy.EnemyType.NORMAL);
+                    enemy.setSpeed(normalBaseSpeed);
+                    enemy.setHealth(normalBaseHealth);
+                    enemy.setMaxHealth(enemy.getHealth());
+                    enemy.setDamage(normalBaseDamage);
+                    enemy.setScoreValue(normalScore);
+                }
                 enemies.add(enemy);
                 lastDamageTime.put(enemy, 0L);
             }
@@ -425,15 +635,40 @@ public class Game extends Pane {
     }
 
     public void resetGame() {
+        if (isPaused && pauseMenu != null) {
+            pauseMenu.hide();
+        }
+        isPaused = false;
+        if (isShopOpen && shopMenu != null) {
+            shopMenu.hide();
+        }
+        isShopOpen = false;
+        healthUpgradeLevel = 0;
+        speedUpgradeLevel = 0;
+        damageUpgradeLevel = 0;
+        normalSpeed = 4;
+        playerSpeed = normalSpeed;
+        player.resetAttributes();
         player.resetHealth();
         enemies.clear();
         projectiles.clear();
-        spawnEnemies();
-        activeKeys.clear();
+        powerUps.clear();
+        if (particleSystem != null) {
+            particleSystem.clear();
+        }
+        score = 0;
+        shakeDuration = 0;
+        shakeIntensity = 0;
+        shakeOffsetX = 0;
+        shakeOffsetY = 0;
         bossPrefab = null;
         isGameOver = false;
+        gameWon = false;
 
         currentStage = 1;
+        spawnEnemies();
+        activeKeys.clear();
+        
         startTime = System.currentTimeMillis();
         player.x = (int) (gameCanvas.getWidth() / 2);
         player.y = (int) (gameCanvas.getHeight() / 2);
@@ -445,41 +680,49 @@ public class Game extends Pane {
         isReloading = false;
         playerSpeed = normalSpeed;
 
-        if (backgroundMusic != null) {
-            backgroundMusic.stop();
-            backgroundMusic.play();
-        }
+        SoundManager.getInstance().playGameBgm();
     }
 
     public void stopGame() {
-        gameTimer.stop();
+        if (gameTimer != null) {
+            gameTimer.stop();
+        }
     }
+
     private void checkGameOver() {
         if (gameWon) {
             return;
         }
         if (player.getHealth() <= 0 && gameTimer != null && !isGameOver) {
             isGameOver = true;
+            if (isPaused && pauseMenu != null) {
+                pauseMenu.hide();
+            }
+            isPaused = false;
             stopGame();
             try {
-                gameFrame.showGameOver((System.currentTimeMillis() - startTime) / 1000);
+                gameFrame.showGameOver(getElapsedTime());
             } catch (Exception e) {
                 e.printStackTrace();
             }
         }
     }
+
     public void Victory() {
         gameWon = true;
+        if (isPaused && pauseMenu != null) {
+            pauseMenu.hide();
+        }
+        isPaused = false;
         stopGame();
         try {
-            gameFrame.showVictoryScreen((System.currentTimeMillis() - startTime) / 1000);
+            gameFrame.showVictoryScreen(getElapsedTime());
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
     private void drawPlayerUI() {
-
         double maxHealth = player.getMaxHealth();
         double currentHealth = player.getHealth();
 
@@ -489,7 +732,6 @@ public class Game extends Pane {
         double y = 10;
         gc.setFill(Color.rgb(0, 0, 0, 0.6));
         gc.fillRoundRect(x, y, healthBarWidth, healthBarHeight, 10, 10);
-
 
         double healthPercentage = Math.max(0, Math.min(1.0, currentHealth / maxHealth));
         gc.setFill(new LinearGradient(0, 0, healthPercentage, 0, true, CycleMethod.NO_CYCLE,
@@ -515,13 +757,13 @@ public class Game extends Pane {
             gc.setFont(Font.font("Arial", FontWeight.BOLD, 14));
             gc.fillText("RELOADING", x + cooldownWidth + 5, cooldownY + cooldownHeight - 2);
         } else {
-            //cooldown display
+            // Cooldown display
             double cooldownPercent = Math.min(1.0,
                     (System.currentTimeMillis() - lastShotTime) / (getWeaponCooldown() * 1000));
             gc.setFill(Color.rgb(255, 255, 0, 0.8));
             gc.fillRoundRect(x, cooldownY, cooldownWidth * cooldownPercent, cooldownHeight, 5, 5);
 
-            // ready indicator
+            // Ready indicator
             if (cooldownPercent >= 1.0 && currentAmmo > 0) {
                 gc.setFill(Color.WHITE);
                 gc.setFont(Font.font("Arial", FontWeight.BOLD, 12));
@@ -550,15 +792,17 @@ public class Game extends Pane {
 
         double rightAlign = gameCanvas.getWidth() - 150;
         gc.setFill(Color.rgb(0, 0, 0, 0.6));
-        gc.fillRoundRect(rightAlign, 10, 140, 90, 10, 10);
+        gc.fillRoundRect(rightAlign, 10, 140, 110, 10, 10);
 
         gc.setFill(Color.WHITE);
-        long elapsedTime = (System.currentTimeMillis() - startTime) / 1000;
+        long elapsedTime = getElapsedTime();
         String timeStr = String.format("%02d:%02d", elapsedTime / 60, elapsedTime % 60);
         gc.fillText("Stage: " + currentStage, rightAlign + 10, 30);
-        gc.fillText("Time: " + timeStr, rightAlign + 10, 55);
-        gc.fillText("Enemies: " + enemies.size(), rightAlign + 10, 80);
+        gc.fillText("Score: " + score, rightAlign + 10, 55);
+        gc.fillText("Time: " + timeStr, rightAlign + 10, 80);
+        gc.fillText("Enemies: " + enemies.size(), rightAlign + 10, 105);
     }
+
     private void drawEnhancedEnemies() {
         for (Enemy enemy : enemies) {
             if (enemy instanceof Boss) {
@@ -595,6 +839,36 @@ public class Game extends Pane {
                     gc.setFill(Color.PURPLE);
                     gc.fillOval(projectile.x - 5, projectile.y - 5, 10, 10);
                 }
+            } else if (enemy.isRunner()) {
+                // Runner Enemy: fast, glowing speed aura
+                double imageWidth = 50;
+                double imageHeight = 50;
+                double imageX = enemy.x - imageWidth / 2;
+                double imageY = enemy.y - imageHeight / 2;
+
+                gc.setStroke(Color.rgb(255, 140, 0, 0.8));
+                gc.setLineWidth(3);
+                gc.strokeOval(imageX - 2, imageY - 2, imageWidth + 4, imageHeight + 4);
+
+                if (enemy.getEnemyImage() != null) {
+                    gc.drawImage(enemy.getEnemyImage(), imageX, imageY, imageWidth, imageHeight);
+                } else {
+                    gc.setFill(Color.ORANGERED);
+                    gc.fillRect(enemy.x - 10, enemy.y - 10, 20, 20);
+                }
+
+                double healthBarWidth = 26;
+                double healthBarHeight = 4;
+                double maxHealth = enemy.getMaxHealth();
+                double healthPercentage = Math.max(0, enemy.getHealth() / maxHealth);
+
+                double healthBarX = enemy.x + 5 - (healthBarWidth / 2);
+                double healthBarY = enemy.y - 12;
+
+                gc.setFill(Color.BLACK);
+                gc.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
+                gc.setFill(Color.GOLD);
+                gc.fillRect(healthBarX, healthBarY, healthBarWidth * healthPercentage, healthBarHeight);
             } else {
                 if (enemy.getEnemyImage() != null) {
                     double imageWidth = 60;
@@ -624,6 +898,7 @@ public class Game extends Pane {
             }
         }
     }
+
     private void drawProjectiles() {
         for (Projectile projectile : projectiles) {
             switch (projectile.weaponType) {
@@ -658,183 +933,24 @@ public class Game extends Pane {
         }
     }
 
-    class Enemy {
-        double x, y;
-        int health;
-        double maxHealth;
-        double speed = 2;
-        private Image enemyImage;
-
-        public Enemy(int x, int y) {
-            this.x = x;
-            this.y = y;
-            this.health = 30;
-            this.maxHealth = 30;
-
-            try {
-                InputStream is = getClass().getResourceAsStream("/images/Monster.gif");
-                if (is != null) {
-                    enemyImage = new Image(is);
-                } else {
-                    System.err.println("Enemy GIF not found!");
-                }
-            } catch (Exception e) {
-                System.err.println("Error loading enemy GIF: " + e.getMessage());
-            }
-        }
-
-        public Image getEnemyImage() {
-            return enemyImage;
-        }
-
-        public void takeDamage(int damage) {
-            this.health -= damage;
-            if (soundEffects != null) {
-                AudioClip hitSound = soundEffects.get("Enemy_Hit");
-                if (hitSound != null) {
-                    hitSound.play(0.4);
-                }
-            }
-        }
-
-        public int getHealth() {
-            return health;
-        }
-
-        public double getMaxHealth() {
-            return maxHealth;
-        }
-    }
-    class Boss extends Enemy {
-        private double shotCooldown;
-        private long lastShotTime;
-        private List<Projectile> bossProjectiles;
-        private boolean isCharging;
-        private long chargeStartTime;
-        private static final double BOSS_CHARGE_DURATION = 2.0;
-        private static final double BOSS_CHARGE_SPEED = 6.0;
-        private Point chargeTarget;
-        private Image bossImage;
-
-        public Boss(int x, int y, Image bossImage) {
-            super(x, y);
-            this.health = BOSS_HEALTH_BASE;
-            this.maxHealth = BOSS_HEALTH_BASE;
-            this.speed = 1.0;
-            this.shotCooldown = 1.5;
-            this.lastShotTime = 0;
-            this.bossProjectiles = new ArrayList<>();
-            this.isCharging = false;
-            this.bossImage = bossImage;
-        }
-
-        public void update(Hero player) {
-            if (isCharging) {
-                long currentTime = System.currentTimeMillis();
-                if (currentTime - chargeStartTime > BOSS_CHARGE_DURATION * 1000) {
-                    isCharging = false;
-                } else {
-                    // Execute charge
-                    double dx = chargeTarget.x - x;
-                    double dy = chargeTarget.y - y;
-                    double distance = Math.sqrt(dx * dx + dy * dy);
-
-                    if (distance > 0) {
-                        dx /= distance;
-                        dy /= distance;
-                        x += dx * BOSS_CHARGE_SPEED;
-                        y += dy * BOSS_CHARGE_SPEED;
-                    }
-                }
-            } else {
-                double dx = player.x - x;
-                double dy = player.y - y;
-                double distance = Math.sqrt(dx * dx + dy * dy);
-
-                if (distance > 0) {
-                    dx /= distance;
-                    dy /= distance;
-                }
-
-                x += dx * speed;
-                y += dy * speed;
-
-                if (Math.random() < 0.02) {
-                    startCharge(player);
-                }
-            }
-        }
-
-        private void startCharge(Hero player) {
-            isCharging = true;
-            chargeStartTime = System.currentTimeMillis();
-            chargeTarget = new Point((int)player.x, (int)player.y);
-        }
-
-        public List<Projectile> getBossProjectiles() {
-            return bossProjectiles;
-        }
-
-        public void shootProjectiles(Hero player) {
-            long currentTime = System.currentTimeMillis();
-            if (currentTime - lastShotTime > shotCooldown * 1000) {
-                int numProjectiles = 20;
-                for (int i = 0; i < numProjectiles; i++) {
-                    double angle = (Math.PI * 2 * i) / numProjectiles;
-                    double dx = Math.cos(angle);
-                    double dy = Math.sin(angle);
-
-                    Projectile projectile = new Projectile(
-                            x + 10,
-                            y + 10,
-                            dx * 4,
-                            dy * 4,
-                            BOSS_DAMAGE
-                    );
-                    projectile.weaponType = "Boss";
-                    bossProjectiles.add(projectile);
-                }
-                lastShotTime = currentTime;
-            }
-        }
-        public Image getBossImage() {
-            return bossImage;
-        }
-        public int getHealth() {
-            return health;
-        }
-    }
-
-
-    class Projectile {
-        double x, y;
-        double dx, dy;
-        int damage;
-        String weaponType = "Default";
-
-        public Projectile(double x, double y, double dx, double dy, int damage) {
-            this.x = x;
-            this.y = y;
-            this.dx = dx;
-            this.dy = dy;
-            this.damage = damage;
-        }
-
-        public void update() {
-            x += dx;
-            y += dy;
-        }
-    }
     public void initializeKeyHandling(Scene scene) {
         this.gameScene = scene;
 
         scene.setOnKeyPressed(event -> {
-            activeKeys.add(event.getCode());
+            if (event.getCode() == KeyCode.ESCAPE) {
+                if (!isShopOpen && !isGameOver && !gameWon) {
+                    togglePause();
+                }
+            } else if (!isShopOpen && !isPaused) {
+                activeKeys.add(event.getCode());
+            }
             event.consume();
         });
 
         scene.setOnKeyReleased(event -> {
-            activeKeys.remove(event.getCode());
+            if (!isShopOpen && !isPaused) {
+                activeKeys.remove(event.getCode());
+            }
             event.consume();
         });
 
@@ -843,123 +959,196 @@ public class Game extends Pane {
             scene.getRoot().requestFocus();
         });
     }
+
     private void handleKeyPressed(KeyEvent event) {
+        if (event.getCode() == KeyCode.ESCAPE) {
+            if (!isShopOpen && !isGameOver && !gameWon) {
+                togglePause();
+            }
+            event.consume();
+            return;
+        }
+        if (isShopOpen || isPaused) return;
         KeyCode code = event.getCode();
         activeKeys.add(code);
         event.consume();
     }
 
     private void handleKeyReleased(KeyEvent event) {
+        if (isShopOpen || isPaused) return;
         KeyCode code = event.getCode();
         activeKeys.remove(code);
         event.consume();
     }
 
     private void handleMouseMoved(MouseEvent event) {
+        if (isShopOpen || isPaused) return;
         mousePosition.setLocation(event.getX(), event.getY());
         player.updateRotation(event.getX(), event.getY());
     }
 
-}
-class Hero {
-    private String characterType;
-    private int health;
-    private int maxHealth;
-    private int damage;
-    int x;
-    int y;
-    private Image characterImage;
-    private double rotation = 0;
-
-    public Hero(String characterType, int startX, int startY, Image characterImage) {
-        this.characterType = characterType;
-        this.x = startX;
-        this.y = startY;
-        this.characterImage = characterImage;
-        initializeCharacterAttributes();
-        this.maxHealth = this.health;
+    public int getHealthUpgradeCost() {
+        return 150 + healthUpgradeLevel * 100;
     }
 
-    private void initializeCharacterAttributes() {
-        switch (characterType) {
-            case "Pistol":
-                this.health = 120;
-                this.damage = 50;
-                break;
-            case "Rifle":
-                this.health = 100;
-                this.damage = 20;
-                break;
-            default:
-                this.health = 80;
-                this.damage = 10;
-                break;
+    public int getSpeedUpgradeCost() {
+        return 200 + speedUpgradeLevel * 150;
+    }
+
+    public int getDamageUpgradeCost() {
+        return 250 + damageUpgradeLevel * 150;
+    }
+
+    public int getHealthUpgradeLevel() {
+        return healthUpgradeLevel;
+    }
+
+    public int getSpeedUpgradeLevel() {
+        return speedUpgradeLevel;
+    }
+
+    public int getDamageUpgradeLevel() {
+        return damageUpgradeLevel;
+    }
+
+    public int getNormalSpeed() {
+        return normalSpeed;
+    }
+
+    public void setNormalSpeed(int speed) {
+        this.normalSpeed = speed;
+        this.playerSpeed = speed;
+    }
+
+    public boolean isShopOpen() {
+        return isShopOpen;
+    }
+
+    public ShopMenu getShopMenu() {
+        return shopMenu;
+    }
+
+    public boolean buyHealthUpgrade() {
+        int cost = getHealthUpgradeCost();
+        if (score >= cost) {
+            score -= cost;
+            healthUpgradeLevel++;
+            player.increaseMaxHealth(25, true);
+            if (particleSystem != null) {
+                particleSystem.spawnPowerUpCollect(player.x, player.y, Color.LIGHTGREEN, 25);
+            }
+            return true;
         }
-        this.maxHealth = this.health;
+        return false;
     }
 
-    public void resetHealth() {
-        this.health = this.maxHealth;
+    public boolean buySpeedUpgrade() {
+        int cost = getSpeedUpgradeCost();
+        if (score >= cost) {
+            score -= cost;
+            speedUpgradeLevel++;
+            normalSpeed += 1;
+            playerSpeed = normalSpeed;
+            if (particleSystem != null) {
+                particleSystem.spawnPowerUpCollect(player.x, player.y, Color.GOLD, 25);
+            }
+            return true;
+        }
+        return false;
     }
 
-    public void takeDamage(int damage) {
-        this.health = Math.max(0, this.health - damage);
+    public boolean buyDamageUpgrade() {
+        int cost = getDamageUpgradeCost();
+        if (score >= cost) {
+            score -= cost;
+            damageUpgradeLevel++;
+            player.increaseDamage(15);
+            if (particleSystem != null) {
+                particleSystem.spawnPowerUpCollect(player.x, player.y, Color.ORANGERED, 25);
+            }
+            return true;
+        }
+        return false;
     }
 
-    public int getHealth() {
-        return health;
-    }
-
-    public int getDamage() {
-        return damage;
-    }
-
-    public String getCharacterType() {
-        return characterType;
-    }
-
-    public void moveUp(int speed) {
-        int newY = y - speed;
-        y = Math.max(100, newY);
-    }
-    public void moveDown(int speed) {
-        int newY = y + speed;
-        y = Math.min(700 - 30, newY);
-    }
-
-    public void moveLeft(int speed) {
-        int newX = x - speed;
-        x = Math.max(100, newX);
-    }
-
-    public void moveRight(int speed) {
-        int newX = x + speed;
-        x = Math.min(900 - 30, newX);
-    }
-    public void updateRotation(double mouseX, double mouseY) {
-        double dx = mouseX - x;
-        double dy = mouseY - y;
-        this.rotation = Math.atan2(dy, dx);
-    }
-
-
-    public void draw(GraphicsContext gc) {
-        if (characterImage != null) {
-            double width = 100;
-            double height = 100;
-
-            gc.save();
-            gc.translate(x, y);
-            gc.rotate(Math.toDegrees(rotation)+90);
-            gc.drawImage(characterImage, -width / 2, -height / 2, width, height);
-            gc.restore();
-        } else {
-            gc.setFill(Color.GREEN);
-            gc.fillRect(x - 15, y - 15, 30, 30);
+    public void openShopMenu() {
+        if (isShopOpen) return;
+        isShopOpen = true;
+        isMousePressed = false;
+        activeKeys.clear();
+        projectiles.clear();
+        if (shopMenu != null) {
+            shopMenu.show(currentStage);
+            shopMenu.toFront();
         }
     }
 
-    public double getMaxHealth() {
-        return maxHealth;
+    public void closeShopAndNextStage() {
+        if (!isShopOpen) return;
+        isShopOpen = false;
+        if (shopMenu != null) {
+            shopMenu.hide();
+        }
+        if (currentStage + 1 == 5) {
+            SoundManager.getInstance().playBossBgm();
+        }
+        advanceToNextStage();
+        this.requestFocus();
+    }
+
+    public int getScore() {
+        return score;
+    }
+
+    public void setScore(int score) {
+        this.score = score;
+    }
+
+    public void addScore(int points) {
+        this.score += points;
+    }
+
+    public ParticleSystem getParticleSystem() {
+        return particleSystem;
+    }
+
+    public List<PowerUp> getPowerUps() {
+        return powerUps;
+    }
+
+    public List<Enemy> getEnemies() {
+        return enemies;
+    }
+
+    public List<Projectile> getProjectiles() {
+        return projectiles;
+    }
+
+    public Hero getPlayer() {
+        return player;
+    }
+
+    public int getCurrentStage() {
+        return currentStage;
+    }
+
+    public double getShakeDuration() {
+        return shakeDuration;
+    }
+
+    public double getShakeIntensity() {
+        return shakeIntensity;
+    }
+
+    public double getShakeOffsetX() {
+        return shakeOffsetX;
+    }
+
+    public double getShakeOffsetY() {
+        return shakeOffsetY;
+    }
+
+    public void setCurrentStage(int stage) {
+        this.currentStage = stage;
     }
 }
