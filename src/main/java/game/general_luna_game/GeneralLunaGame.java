@@ -31,7 +31,7 @@ public class GeneralLunaGame extends Application {
 
         if (currentGame != null) {
             currentGame.stopGame();
-            Game.backgroundMusic.stop();
+            SoundManager.getInstance().stopBgm();
             currentGame = null;
         }
     }
@@ -49,16 +49,13 @@ public class GeneralLunaGame extends Application {
         this.currentHero = hero;
 
         if (currentGame != null) {
-            currentGame.resetGame();
-        } else {
-            currentGame = new Game(hero, this);
+            currentGame.stopGame();
         }
         currentGame = new Game(hero, this);
         Scene scene = new Scene(currentGame, 1000, 800);
         primaryStage.setScene(scene);
         currentGame.initializeKeyHandling(scene);
         currentGame.requestFocus();
-
     }
 
     public void showLeaderboard() throws Exception {
@@ -69,7 +66,7 @@ public class GeneralLunaGame extends Application {
         controller.setLeaderboard(leaderboard);
         Scene scene = new Scene(root, 1000, 800);
         primaryStage.setScene(scene);
-        Game.backgroundMusic.stop();
+        SoundManager.getInstance().stopBgm();
     }
 
     public void addScoreToLeaderboard(String name, long time) {
@@ -86,6 +83,7 @@ public class GeneralLunaGame extends Application {
         Scene scene = new Scene(root, 1000, 800);
         primaryStage.setScene(scene);
     }
+
     public void showVictoryScreen(long finalTime) throws Exception {
         FXMLLoader loader = new FXMLLoader(getClass().getResource("VictoryScreen.fxml"));
         Parent root = loader.load();
@@ -96,17 +94,15 @@ public class GeneralLunaGame extends Application {
         primaryStage.setScene(scene);
     }
 
-
     public Hero getCurrentHero() {
         return currentHero;
     }
+
     public Game getCurrentGame() {
         return currentGame;
     }
 
-
     public static void main(String[] args) {
         launch(args);
     }
-
 }
